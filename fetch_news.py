@@ -182,6 +182,47 @@ def previous_issues():
         return None
 
 
+
+# ---------- 비슷한 기사 묶기 ----------
+SIMILARITY = 0.3        # 0~1. 높일수록 더 비슷해야 묶이고, 낮출수록 더 많이 묶입니다
+
+
+def _core(title, remove):
+    """비교용 제목: 회사명·괄호표시·기호를 빼고 띄어쓰기를 없앱니다."""
+    t = re.sub(r"\[[^\]]*\]", "", title)          # [단독], [포토] 같은 머리표 제거
+    for r in remove:
+        t = t.replace(r, "")
+    return re.sub(r"[^0-9A-Za-z가-힣]", "", t).lower()
+
+
+def _bigrams(t):
+    return {t[k:k + 2] for k in range(len(t) - 1)}
+
+
+def _similar(a, b):
+    if not a or not b:
+        return 0.0
+    inter = len(a & b)
+    return inter / min(len(a), len(b))  # 짧은 제목 기준 겹침 비율
+
+
+def cluster(items, remove):
+    """같은 묶음 안의 기사들을 비슷한 것끼리 모읍니다. 최신 기사가 대표가 됩니다."""
+    clusters = []
+    for i in items:  # items 는 최신순
+        bg = _bigrams(_core(i["title"], remove))
+        best, best_sim = None, 0.0
+        for c in clusters:
+            sim = max(_similar(bg, x) for x in c["bigrams"])
+            if sim > best_sim:
+                best, best_sim = c, sim
+        if best is not None and best_sim >= SIMILARITY and len(bg) >= 4:
+            best["items"].append(i)
+            best["bigrams"].append(bg)
+        else:
+            clusters.append({"items": [i], "bigrams": [bg]})
+    return clusters
+
 # ---------- 페이지 만들기 ----------
 def when_label(dt, now):
     if dt is None:
@@ -213,11 +254,30 @@ def render(groups, items, issues, prev, errors):
                 f'<span class="title">{esc(i["title"])}</span>'
                 f'<span class="meta">{"".join(meta)}</span></a></li>')
 
+    def folder(c):
+        first, rest = c["items"][0], c["items"][1:]
+        sources = []
+        for i in c["items"]:
+            if i["source"] and i["source"] not in sources:
+                sources.append(i["source"])
+        src = ", ".join(sources[:2]) + (f" 외 {len(sources) - 2}곳" if len(sources) > 2 else "")
+        w = when_label(first["dt"], now)
+        all_titles = " ".join(i["title"] for i in c["items"])
+        inner = "".join(row(i) for i in c["items"])
+        return (f'<li class="cluster" data-title="{esc(all_titles)}"><details>'
+                f'<summary><span class="title">{esc(first["title"])}</span>'
+                f'<span class="meta"><span class="bundle">관련 기사 {len(c["items"])}건</span>'
+                f'<span>{esc(src)}</span>{f"<span>{w}</span>" if w else ""}</span></summary>'
+                f'<ul class="inner">{inner}</ul></details></li>')
+
+    remove = [g["name"] for g in groups] + [w for g in groups for t in g["terms"] for w in t.split()]
     sections, buttons = [], [f'<button type="button" data-f="전체" aria-pressed="true">전체 {len(items)}</button>']
     for g in groups:
         gi = [i for i in items if i["group"] == g["name"]]
+        clusters = cluster(gi, remove)
         buttons.append(f'<button type="button" data-f="{esc(g["name"])}" aria-pressed="false">{esc(g["name"])} {len(gi)}</button>')
-        body = "".join(row(i) for i in gi) or '<li class="empty">최근 48시간 새 기사 없음</li>'
+        body = "".join(folder(c) if len(c["items"]) > 1 else row(c["items"][0]) for c in clusters) \
+            or '<li class="empty">최근 48시간 새 기사 없음</li>'
         sections.append(f'<section class="group" data-tag="{esc(g["name"])}">'
                         f'<h3>{esc(g["name"])} <span class="count">{len(gi)}</span></h3>'
                         f'<ul class="news">{body}</ul></section>')
