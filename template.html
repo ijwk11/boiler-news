@@ -30,6 +30,9 @@
   .news li + li { border-top:1px solid var(--line); }
   .news a { display:block; padding:1rem 1.15rem; color:inherit; text-decoration:none; }
   .news a:hover .title { color:var(--flame); text-decoration:underline; text-underline-offset:3px; }
+  .group + .group { margin-top:1.6rem; }
+  h3 { font-size:.95rem; font-weight:600; margin:0 0 .5rem; display:flex; align-items:center; gap:.45rem; }
+  h3 .count { background:var(--flame-soft); color:var(--flame); font-size:.78rem; padding:0 .5rem; border-radius:4px; font-weight:500; }
   .news li.empty { padding:1.2rem; color:var(--ink-soft); }
   .title { display:block; font-weight:600; font-size:1.02rem; line-height:1.45; }
   .meta { display:flex; flex-wrap:wrap; gap:.35rem .75rem; margin-top:.35rem; font-size:.82rem; color:var(--ink-soft); }
@@ -40,6 +43,14 @@
   .hint { font-size:.85rem; color:var(--ink-soft); margin:-.4rem 0 .9rem; }
   .warn { font-size:.85rem; color:var(--ember); }
   footer { margin-top:2.5rem; font-size:.85rem; color:var(--ink-soft); border-top:1px solid var(--line); padding-top:1rem; }
+  .issues { display:flex; flex-wrap:wrap; gap:.45rem; }
+  .issue { font:inherit; font-size:.9rem; font-weight:500; border:1px solid var(--line); background:var(--surface); color:var(--ink); padding:.3rem .8rem; border-radius:999px; cursor:pointer; }
+  .issue .n { color:var(--ink-soft); font-size:.8rem; margin-left:.15rem; }
+  .issue .new { font-style:normal; font-size:.68rem; font-weight:600; color:var(--ember); margin-left:.25rem; }
+  .issue[aria-pressed="true"] { border-color:var(--flame); background:var(--flame-soft); color:var(--flame); }
+  .issue-bar { font-size:.88rem; margin:.8rem 0 0; display:flex; flex-wrap:wrap; gap:.4rem .9rem; align-items:center; }
+  .issue-bar a { color:var(--flame); }
+  .issue-bar button { font:inherit; font-size:.82rem; border:1px solid var(--line); background:var(--surface); color:var(--ink-soft); border-radius:6px; padding:.1rem .6rem; cursor:pointer; }
   :focus-visible { outline:2px solid var(--flame); outline-offset:2px; }
 </style>
 </head>
@@ -50,28 +61,56 @@
     <div class="stamp">자동 수집 <b>{{UPDATED}}</b></div>
   </header>
 
+  <h2>이슈 키워드</h2>
+  <p class="hint">최근 48시간 헤드라인에 자주 나온 단어예요. 숫자는 기사 수, NEW는 어제 목록에 없던 단어입니다. 누르면 해당 기사만 모아 보여줘요.</p>
+  <div class="issues" id="issues">{{ISSUES}}</div>
+  <p class="issue-bar" id="issueBar" hidden><span id="issueLabel"></span> <a id="issueSearch" target="_blank" rel="noopener">네이버에서 더 보기 ↗</a> <button type="button" id="issueClear">해제</button></p>
+
   <h2>주요 헤드라인 (최근 48시간)</h2>
   {{ERRORS}}
   <div class="filters" id="filters">{{FILTERS}}</div>
-  <ul class="news" id="news">
+  <div id="news">
 {{ROWS}}
-  </ul>
+  </div>
 
   <h2>더 찾아보기</h2>
   <p class="hint">키워드를 누르면 네이버 뉴스 최신순 검색 결과가 새 탭으로 열립니다.</p>
   <div class="chips">{{CHIPS}}</div>
 
-  <footer>매일 아침 자동으로 갱신됩니다. 키워드는 저장소의 keywords.txt에서 바꿀 수 있어요.</footer>
+  <footer>매일 아침 자동으로 갱신됩니다. 묶음 순서와 검색어는 keywords.txt, 이슈 키워드에서 뺄 단어는 stopwords.txt에서 바꿀 수 있어요.</footer>
 </div>
 <script>
-  const btns = document.querySelectorAll("#filters button");
-  btns.forEach(b => b.addEventListener("click", () => {
-    const f = b.dataset.f;
-    btns.forEach(x => x.setAttribute("aria-pressed", String(x === b)));
-    document.querySelectorAll("#news li[data-tag]").forEach(li => {
-      li.hidden = !(f === "전체" || li.dataset.tag === f);
+  let group = "전체", word = "";
+  const groupBtns = document.querySelectorAll("#filters button");
+  const issueBtns = document.querySelectorAll(".issue");
+  function apply() {
+    document.querySelectorAll("#news .group").forEach(g => {
+      let shown = 0;
+      g.querySelectorAll("li[data-title]").forEach(li => {
+        const ok = !word || li.dataset.title.includes(word);
+        li.hidden = !ok; if (ok) shown++;
+      });
+      const empty = g.querySelector("li.empty");
+      if (empty) empty.hidden = !!word;
+      g.hidden = !(group === "전체" || g.dataset.tag === group) || (word && shown === 0);
     });
+    groupBtns.forEach(b => b.setAttribute("aria-pressed", String(b.dataset.f === group)));
+    issueBtns.forEach(b => b.setAttribute("aria-pressed", String(b.dataset.w === word)));
+    const bar = document.getElementById("issueBar");
+    bar.hidden = !word;
+    if (word) {
+      document.getElementById("issueLabel").textContent = "“" + word + "” 관련 기사만 보는 중";
+      document.getElementById("issueSearch").href = "https://search.naver.com/search.naver?where=news&sort=1&query=" + encodeURIComponent(word);
+    }
+  }
+  groupBtns.forEach(b => b.addEventListener("click", () => { group = b.dataset.f; apply(); }));
+  issueBtns.forEach(b => b.addEventListener("click", () => {
+    word = word === b.dataset.w ? "" : b.dataset.w;
+    if (word) group = "전체";
+    apply();
+    if (word) document.getElementById("news").scrollIntoView({ behavior: "smooth", block: "start" });
   }));
+  document.getElementById("issueClear").addEventListener("click", () => { word = ""; apply(); });
 </script>
 </body>
 </html>
