@@ -14,6 +14,7 @@
     :root { --bg:#0F1724; --surface:#172235; --ink:#E7ECF4; --ink-soft:#9AA7BD; --line:#2A3850; --flame:#7AA7FF; --flame-soft:#1E3256; --ember:#E9B05A; color-scheme:dark; }
   }
   *, *::before, *::after { box-sizing:border-box; }
+  [hidden] { display:none !important; }
   body { margin:0; background:var(--bg); color:var(--ink); font-family:"IBM Plex Sans KR","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif; font-size:16px; line-height:1.6;
          padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px); }
   .wrap { max-width:720px; margin:0 auto; padding:2rem 1.25rem 4rem; }
@@ -61,6 +62,32 @@
   .inner li a { padding:.55rem .9rem; }
   .inner .title { font-size:.95rem; font-weight:500; }
   .news .inner li + li { border-top:0; }
+  li.row { display:flex; align-items:flex-start; }
+  li.row > a { flex:1; min-width:0; }
+  .share { flex:none; margin:.75rem .6rem 0 0; width:2.2rem; height:2.2rem; display:grid; place-items:center; border:1px solid transparent; background:transparent; color:var(--ink-soft); border-radius:8px; cursor:pointer; }
+  .share:hover { color:var(--flame); border-color:var(--line); background:var(--bg); }
+  .inner .share { margin-top:.35rem; }
+  li.row.read .title { color:var(--ink-soft); font-weight:500; }
+  .readmark { font-size:.72rem; color:var(--ink-soft); border:1px solid var(--line); border-radius:4px; padding:0 .35rem; }
+  .toolbar { display:flex; justify-content:flex-end; margin:-.6rem 0 1rem; }
+  .recent-btn { font:inherit; font-size:.88rem; font-weight:500; border:1px solid var(--line); background:var(--surface); color:var(--ink); border-radius:999px; padding:.35rem .9rem; cursor:pointer; display:inline-flex; align-items:center; gap:.35rem; }
+  .recent-btn[aria-expanded="true"] { border-color:var(--flame); color:var(--flame); background:var(--flame-soft); }
+  .recent-btn .n { color:var(--ink-soft); font-size:.8rem; }
+  #recent { background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:1rem 1.15rem; margin-bottom:1.5rem; }
+  #recent h2 { margin:0 0 .25rem; display:flex; justify-content:space-between; align-items:center; gap:.5rem; }
+  #recent .clear { font:inherit; font-size:.8rem; font-weight:400; border:0; background:none; color:var(--ink-soft); cursor:pointer; text-decoration:underline; }
+  #recent h4 { font-size:.82rem; color:var(--ink-soft); font-weight:600; margin:1rem 0 .3rem; }
+  #recent ul { list-style:none; margin:0; padding:0; }
+  #recent li { display:flex; align-items:flex-start; gap:.25rem; border-top:1px solid var(--line); }
+  #recent li:first-child { border-top:0; }
+  #recent li a { flex:1; min-width:0; padding:.6rem 0; color:inherit; text-decoration:none; }
+  #recent li a:hover .title { color:var(--flame); }
+  #recent .title { font-size:.95rem; font-weight:500; }
+  #recent .share { margin:.3rem 0 0; }
+  #recent .del { flex:none; width:2.2rem; height:2.2rem; margin-top:.3rem; border:0; background:none; color:var(--ink-soft); font-size:1.1rem; cursor:pointer; border-radius:8px; }
+  #recent .del:hover { color:var(--ink); background:var(--bg); }
+  .toast { position:fixed; left:50%; bottom:calc(1.5rem + env(safe-area-inset-bottom,0px)); transform:translate(-50%, 1rem); background:var(--ink); color:var(--bg); padding:.55rem 1.1rem; border-radius:999px; font-size:.88rem; opacity:0; pointer-events:none; transition:opacity .2s, transform .2s; z-index:20; }
+  .toast.show { opacity:1; transform:translate(-50%, 0); }
   :focus-visible { outline:2px solid var(--flame); outline-offset:2px; }
 </style>
 </head>
@@ -70,6 +97,15 @@
     <h1>{{DATE_TITLE}}<small>보일러 업계 아침 뉴스</small></h1>
     <div class="stamp">자동 수집 <b>{{UPDATED}}</b></div>
   </header>
+
+  <div class="toolbar">
+    <button type="button" class="recent-btn" id="recentBtn" aria-expanded="false" aria-controls="recent">🕘 최근 본 기사 <span class="n" id="recentCount">0</span></button>
+  </div>
+  <section id="recent" hidden>
+    <h2>최근 본 기사 <button type="button" class="clear" id="recentClear">전체 지우기</button></h2>
+    <p class="hint" style="margin:0">최근 7일 동안 이 기기에서 열어본 기사예요. 7일이 지나면 자동으로 사라집니다.</p>
+    <div id="recentList"></div>
+  </section>
 
   <h2>이슈 키워드</h2>
   <p class="hint">최근 48시간 헤드라인에 자주 나온 단어예요. 숫자는 기사 수, NEW는 어제 목록에 없던 단어입니다. 누르면 해당 기사만 모아 보여줘요.</p>
@@ -89,6 +125,7 @@
 
   <footer>매일 아침 자동으로 갱신됩니다. 묶음 순서와 검색어는 keywords.txt, 이슈 키워드에서 뺄 단어는 stopwords.txt에서 바꿀 수 있어요.</footer>
 </div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script>
   let group = "전체", word = "";
   const groupBtns = document.querySelectorAll("#filters button");
@@ -126,6 +163,131 @@
     if (word) document.getElementById("news").scrollIntoView({ behavior: "smooth", block: "start" });
   }));
   document.getElementById("issueClear").addEventListener("click", () => { word = ""; apply(); });
+
+  /* ---------- 공유(링크 복사) ---------- */
+  const toastEl = document.getElementById("toast");
+  let toastTimer;
+  function toast(msg) {
+    toastEl.textContent = msg; toastEl.classList.add("show");
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => toastEl.classList.remove("show"), 1800);
+  }
+  async function copyText(text) {
+    try { await navigator.clipboard.writeText(text); return true; }
+    catch (e) {
+      const ta = document.createElement("textarea");
+      ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.select();
+      let ok = false; try { ok = document.execCommand("copy"); } catch (e2) {}
+      ta.remove(); return ok;
+    }
+  }
+  const isTouch = window.matchMedia("(pointer: coarse)").matches;
+  async function share(title, source, url) {
+    const label = source ? `${title} - ${source}` : title;
+    if (isTouch && navigator.share) {          // 휴대폰: 카톡·문자 등 공유 창
+      try { await navigator.share({ title: label, text: label, url }); return; }
+      catch (e) { if (e && e.name === "AbortError") return; }
+    }
+    const ok = await copyText(`${label}\n${url}`);  // PC: 제목+링크 복사
+    toast(ok ? "제목과 링크를 복사했어요" : "복사하지 못했어요");
+  }
+  document.addEventListener("click", e => {
+    const btn = e.target.closest(".share");
+    if (!btn) return;
+    e.preventDefault(); e.stopPropagation();
+    const a = btn.parentElement.querySelector("a");
+    share(a.querySelector(".title").textContent, a.dataset.src || "", a.href);
+  });
+
+  /* ---------- 최근 본 기사 (7일 보관, 이 기기에만 저장) ---------- */
+  const KEY = "boiler-news-history", DAY = 86400000, KEEP = 7 * DAY;
+  function loadHist() {
+    try {
+      const h = JSON.parse(localStorage.getItem(KEY) || "[]");
+      return Array.isArray(h) ? h.filter(x => x && x.u && Date.now() - x.at < KEEP) : [];
+    } catch (e) { return []; }
+  }
+  function saveHist(h) { try { localStorage.setItem(KEY, JSON.stringify(h.slice(0, 300))); } catch (e) {} }
+  let hist = loadHist(); saveHist(hist);
+
+  function remember(a) {
+    const item = { t: a.querySelector(".title").textContent, s: a.dataset.src || "", u: a.href, at: Date.now() };
+    hist = [item, ...hist.filter(x => x.u !== item.u)];
+    saveHist(hist); markRead(); renderRecent();
+  }
+  ["click", "auxclick"].forEach(ev => document.addEventListener(ev, e => {
+    const a = e.target.closest("a.art");
+    if (a && !a.closest("#recent")) remember(a);
+  }));
+
+  function markRead() {
+    const seen = new Set(hist.map(x => x.u));
+    document.querySelectorAll("#news li.row").forEach(li => {
+      const a = li.querySelector("a.art");
+      const read = seen.has(a.href);
+      li.classList.toggle("read", read);
+      const meta = a.querySelector(".meta");
+      let m = meta.querySelector(".readmark");
+      if (read && !m) { m = document.createElement("span"); m.className = "readmark"; m.textContent = "읽음"; meta.prepend(m); }
+      if (!read && m) m.remove();
+    });
+  }
+
+  function dayLabel(ts) {
+    const d = new Date(ts), today = new Date(); today.setHours(0, 0, 0, 0);
+    const diff = Math.round((today - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / DAY);
+    if (diff === 0) return "오늘";
+    if (diff === 1) return "어제";
+    return `${d.getMonth() + 1}월 ${d.getDate()}일`;
+  }
+  function hhmm(ts) { const d = new Date(ts); return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0"); }
+
+  function renderRecent() {
+    document.getElementById("recentCount").textContent = hist.length;
+    const box = document.getElementById("recentList");
+    box.innerHTML = "";
+    if (!hist.length) {
+      const p = document.createElement("p"); p.className = "hint"; p.style.margin = "1rem 0 0";
+      p.textContent = "아직 열어본 기사가 없어요. 헤드라인을 누르면 여기에 기록됩니다.";
+      box.append(p); return;
+    }
+    let cur = "", ul;
+    hist.forEach(x => {
+      const lab = dayLabel(x.at);
+      if (lab !== cur) {
+        cur = lab;
+        const h = document.createElement("h4"); h.textContent = lab; box.append(h);
+        ul = document.createElement("ul"); box.append(ul);
+      }
+      const li = document.createElement("li");
+      const a = document.createElement("a");
+      a.href = x.u; a.target = "_blank"; a.rel = "noopener"; a.dataset.src = x.s;
+      const t = document.createElement("span"); t.className = "title"; t.textContent = x.t;
+      const m = document.createElement("span"); m.className = "meta";
+      if (x.s) { const s = document.createElement("span"); s.textContent = x.s; m.append(s); }
+      const w = document.createElement("span"); w.textContent = hhmm(x.at) + " 열어봄"; m.append(w);
+      a.append(t, m);
+      const sh = document.createElement("button");
+      sh.type = "button"; sh.className = "share"; sh.title = "링크 공유"; sh.setAttribute("aria-label", "링크 공유");
+      sh.innerHTML = document.querySelector("#news .share")?.innerHTML || "🔗";
+      const del = document.createElement("button");
+      del.type = "button"; del.className = "del"; del.textContent = "×"; del.title = "목록에서 지우기";
+      del.setAttribute("aria-label", "목록에서 지우기");
+      del.onclick = () => { hist = hist.filter(y => y.u !== x.u); saveHist(hist); markRead(); renderRecent(); };
+      li.append(a, sh, del); ul.append(li);
+    });
+  }
+
+  const recentBtn = document.getElementById("recentBtn"), recentBox = document.getElementById("recent");
+  recentBtn.addEventListener("click", () => {
+    const open = recentBox.hidden;
+    recentBox.hidden = !open; recentBtn.setAttribute("aria-expanded", String(open));
+  });
+  document.getElementById("recentClear").addEventListener("click", () => {
+    if (!hist.length || !confirm("최근 본 기사 기록을 모두 지울까요?")) return;
+    hist = []; saveHist(hist); markRead(); renderRecent();
+  });
+  markRead(); renderRecent();
 </script>
 </body>
 </html>

@@ -29,7 +29,7 @@ ISSUE_TOP = 10          # 이슈 키워드 최대 개수
 ISSUE_MIN = 2           # 최소 몇 개 기사에 나와야 이슈 키워드로 볼지
 
 PARTICLES = ("에서는", "으로는", "에서", "으로", "에게", "까지", "부터", "처럼",
-             "은", "는", "이", "가", "을", "를", "의", "에", "로", "와", "과", "도", "만")
+             "은", "는", "을", "를", "의", "에", "로", "와", "과", "도", "만")
 
 
 # ---------- 설정 읽기 ----------
@@ -224,6 +224,11 @@ def cluster(items, remove):
     return clusters
 
 # ---------- 페이지 만들기 ----------
+SHARE_ICON = ('<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" '
+              'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+              '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/>'
+              '<path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>')
+
 def when_label(dt, now):
     if dt is None:
         return ""
@@ -250,9 +255,11 @@ def render(groups, items, issues, prev, errors):
         w = when_label(i["dt"], now)
         if w:
             meta.append(f"<span>{w}</span>")
-        return (f'<li data-title="{esc(i["title"])}"><a href="{esc(i["link"])}" target="_blank" rel="noopener">'
+        return (f'<li class="row" data-title="{esc(i["title"])}">'
+                f'<a class="art" href="{esc(i["link"])}" target="_blank" rel="noopener" data-src="{esc(i["source"])}">'
                 f'<span class="title">{esc(i["title"])}</span>'
-                f'<span class="meta">{"".join(meta)}</span></a></li>')
+                f'<span class="meta">{"".join(meta)}</span></a>'
+                f'<button type="button" class="share" aria-label="링크 공유" title="링크 공유">{SHARE_ICON}</button></li>')
 
     def folder(c):
         first, rest = c["items"][0], c["items"][1:]
