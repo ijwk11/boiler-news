@@ -25,6 +25,7 @@ OUT_DIR = BASE / "site"
 
 LOOKBACK_HOURS = 48     # 최근 몇 시간 이내 기사만 모을지
 MAX_PER_GROUP = 15      # 묶음당 최대 기사 수
+MAX_FILTERED = 60       # '걸러진 항목'에 보여줄 최대 개수
 ISSUE_TOP = 10          # 이슈 키워드 최대 개수
 ISSUE_MIN = 2           # 최소 몇 개 기사에 나와야 이슈 키워드로 볼지
 
@@ -96,6 +97,23 @@ def norm(title):
     return re.sub(r"[\W_]+", "", title).lower()
 
 
+# 상품 판매글에 자주 나오는 표현. 제목에서 두 가지 이상 보이면 판매글로 판단합니다.
+SHOP_PATTERNS = [
+    r"\d+\s*[x×X*]\s*\d+\s*(cm|mm|m)\b",     # 145x195cm 같은 크기
+    r"\d+\s*(GB|TB|기가)\b",                  # 256GB 같은 용량
+    r"\b[A-Z]{2,}[-‐]?[A-Z0-9]*\d{3,}[A-Z0-9-]*\b",  # EQM340-QS, SM-F971N 같은 품번
+    r"자급제", r"최저가", r"무료\s?배송", r"쿠폰", r"할인\s?정보", r"가격\s?비교",
+    r"스펙과", r"정보\s?정리", r"구매\s?가이드", r"사용\s?후기", r"리뷰\s?정리",
+    r"\b(퀸|킹|슈퍼싱글|싱글)\b", r"슬림형", r"\d+\s?개입", r"\d+\s?매\b",
+    r"슈퍼위크", r"핫딜", r"특가\s?정보",
+]
+
+
+def looks_like_shopping(title):
+    hits = sum(1 for p in SHOP_PATTERNS if re.search(p, title))
+    return hits >= 2
+
+
 def collect(groups):
     excludes = read_lines("exclude.txt")
     cutoff = datetime.now(KST) - timedelta(hours=LOOKBACK_HOURS)
@@ -118,16 +136,43 @@ def collect(groups):
                 i["group"] = g["name"]
                 results.append(i)
 
-    # 제목에 회사명 등 더 구체적인 검색어가 있으면 그 묶음으로 옮깁니다.
-    # (예: '보일러'로 검색됐어도 제목에 '경동나비엔'이 있으면 경동나비엔 묶음으로)
+    # ----- 걸러내기와 묶음 정하기 (기사 제목 기준) -----
+    # 1) 쇼핑·상품정보 사이트 글은 뺍니다.
+    # 2) 제목이 상품 판매글처럼 보이면 뺍니다.
+    # 3) 제목에 회사명 등 구체적인 검색어가 있으면 그 묶음으로,
+    #    없지만 난방 관련 단어가 있으면 업계 일반 묶음(예: 보일러)으로,
+    #    둘 다 없으면 관련 없는 기사로 보고 뺍니다.
+    blocked_sources = read_lines("exclude_sources.txt")
+    industry = read_lines("industry_words.txt")
     heads = [(g["name"], t.split()[0]) for g in groups for t in g["terms"]]
     all_heads = [h for _, h in heads]
     specific = [(n, h) for n, h in heads if not any(h != o and h in o for o in all_heads)]
+    general = next((n for n, h in heads if (n, h) not in specific), None)
+
+    kept, filtered = [], []
     for i in results:
-        for n, h in specific:
-            if h in i["title"]:
-                i["group"] = n
-                break
+        src = i["source"].replace(" ", "").lower()
+        if any(b.replace(" ", "").lower() in src for b in blocked_sources):
+            i["reason"] = "쇼핑·상품 사이트"
+            filtered.append(i)
+            continue
+        if looks_like_shopping(i["title"]):
+            i["reason"] = "상품 판매글로 보임"
+            filtered.append(i)
+            continue
+        match = next((n for n, h in specific if h in i["title"]), None)
+        if match:
+            i["group"] = match
+        elif any(w in i["title"] for w in industry):
+            if general:
+                i["group"] = general
+        else:
+            i["reason"] = "제목에 관련 단어 없음"
+            filtered.append(i)
+            continue
+        kept.append(i)
+    results = kept
+    filtered.sort(key=lambda i: i["dt"] or cutoff, reverse=True)
 
     results.sort(key=lambda i: i["dt"] or cutoff, reverse=True)
     trimmed, counts = [], Counter()
@@ -135,7 +180,7 @@ def collect(groups):
         if counts[i["group"]] < MAX_PER_GROUP:
             counts[i["group"]] += 1
             trimmed.append(i)
-    return trimmed, errors
+    return trimmed, filtered[:MAX_FILTERED], errors
 
 
 # ---------- 이슈 키워드 ----------
@@ -243,7 +288,7 @@ def naver(q):
     return f"https://search.naver.com/search.naver?where=news&sort=1&query={urllib.parse.quote(q)}"
 
 
-def render(groups, items, issues, prev, errors):
+def render(groups, items, issues, prev, errors, filtered):
     now = datetime.now(KST)
     days = "월화수목금토일"
     esc = html.escape
@@ -304,6 +349,24 @@ def render(groups, items, issues, prev, errors):
     err_note = (f'<p class="warn">일부 검색어를 불러오지 못했어요({len(errors)}건). 다음 실행 때 다시 시도합니다.</p>'
                 if errors else "")
 
+    def frow(i):
+        meta = [f'<span class="why">{esc(i["reason"])}</span>']
+        if i["source"]:
+            meta.append(f"<span>{esc(i['source'])}</span>")
+        w = when_label(i["dt"], now)
+        if w:
+            meta.append(f"<span>{w}</span>")
+        return (f'<li class="row"><a class="art" href="{esc(i["link"])}" target="_blank" rel="noopener" '
+                f'data-src="{esc(i["source"])}"><span class="title">{esc(i["title"])}</span>'
+                f'<span class="meta">{"".join(meta)}</span></a></li>')
+
+    if filtered:
+        filtered_html = (f'<details class="filtered"><summary>걸러진 항목 {len(filtered)}건 '
+                         f'<span class="hint-inline">쇼핑글이나 관련 없는 기사로 판단해 목록에서 뺀 것들이에요</span></summary>'
+                         f'<ul class="news">{"".join(frow(i) for i in filtered)}</ul></details>')
+    else:
+        filtered_html = ""
+
     tpl = (BASE / "template.html").read_text(encoding="utf-8")
     return (tpl.replace("{{DATE_TITLE}}", f"{now.month}월 {now.day}일 {days[now.weekday()]}요일")
                .replace("{{UPDATED}}", f"{now:%Y.%m.%d %H:%M}")
@@ -311,19 +374,20 @@ def render(groups, items, issues, prev, errors):
                .replace("{{FILTERS}}", "".join(buttons))
                .replace("{{ROWS}}", "\n".join(sections))
                .replace("{{CHIPS}}", chips)
-               .replace("{{ERRORS}}", err_note))
+               .replace("{{ERRORS}}", err_note)
+               .replace("{{FILTERED}}", filtered_html))
 
 
 def main():
     groups = read_groups()
-    items, errors = collect(groups)
+    items, filtered, errors = collect(groups)
     for e in errors:
         print("경고:", e, file=sys.stderr)
     issues = issue_keywords(items, groups)
     prev = previous_issues()
 
     OUT_DIR.mkdir(exist_ok=True)
-    (OUT_DIR / "index.html").write_text(render(groups, items, issues, prev, errors), encoding="utf-8")
+    (OUT_DIR / "index.html").write_text(render(groups, items, issues, prev, errors, filtered), encoding="utf-8")
     (OUT_DIR / "issues.json").write_text(json.dumps([w for w, _ in issues], ensure_ascii=False), encoding="utf-8")
     (OUT_DIR / "news.json").write_text(json.dumps(
         [{**i, "dt": i["dt"].isoformat() if i["dt"] else None} for i in items],
