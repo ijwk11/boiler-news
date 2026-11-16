@@ -118,6 +118,7 @@ def collect(groups):
     excludes = read_lines("exclude.txt")
     cutoff = datetime.now(KST) - timedelta(hours=LOOKBACK_HOURS)
     seen, results, errors = set(), [], []
+    trade_items = collect_trade(seen, errors)
 
     for g in groups:
         for term in g["terms"]:
@@ -171,7 +172,7 @@ def collect(groups):
             filtered.append(i)
             continue
         kept.append(i)
-    results = kept
+    results = kept + trade_items
     filtered.sort(key=lambda i: i["dt"] or cutoff, reverse=True)
 
     results.sort(key=lambda i: i["dt"] or cutoff, reverse=True)
@@ -182,6 +183,113 @@ def collect(groups):
             trimmed.append(i)
     return trimmed, filtered[:MAX_FILTERED], errors
 
+
+
+# ---------- 업계 전문지 직접 수집 ----------
+TRADE_GROUP = "업계 전문지"
+TRADE_LOOKBACK_DAYS = 7     # 전문지는 기사가 드물어서 최근 7일치를 봅니다
+TRADE_SEARCH_WORDS = 4      # trade_words.txt 앞쪽 몇 개 단어로 사이트 안을 검색할지
+UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"}
+
+
+def read_trade_sources():
+    out = []
+    for line in read_lines("trade_sources.txt"):
+        if "|" in line:
+            name, url = [x.strip() for x in line.split("|", 1)]
+            if name and url.startswith("http"):
+                out.append((name, url.rstrip("/")))
+    return out
+
+
+def http_get(url):
+    req = urllib.request.Request(url, headers=UA)
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return r.read()
+
+
+def _clean(text):
+    text = re.sub(r"<[^>]+>", "", text)
+    return re.sub(r"\s+", " ", html.unescape(text)).strip()
+
+
+DATE_RE = re.compile(r"(20\d{2})[.\-/](\d{1,2})[.\-/](\d{1,2})\.?\s*(\d{1,2}):(\d{2})")
+
+
+def parse_article_list(page, base):
+    """기사 목록·검색 결과 페이지에서 (번호, 제목, 주소, 시각)을 뽑습니다."""
+    page = page.decode("utf-8", errors="replace")
+    found = {}
+    links = list(re.finditer(r'href="([^"]*articleView\.html\?idxno=(\d+))[^"]*"[^>]*>(.*?)</a>', page, re.S))
+    for k, m in enumerate(links):
+        href, idx, inner = m.group(1), m.group(2), _clean(m.group(3))
+        nxt = links[k + 1].start() if k + 1 < len(links) else len(page)
+        seg = page[m.end(): min(nxt, m.end() + 1500)]
+        d = DATE_RE.search(seg)
+        dt = None
+        if d:
+            y, mo, da, hh, mi = map(int, d.groups())
+            try:
+                dt = datetime(y, mo, da, hh, mi, tzinfo=KST)
+            except ValueError:
+                dt = None
+        old = found.get(idx)
+        if old is None or len(inner) > len(old["title"]):
+            found[idx] = {"title": inner, "link": urllib.parse.urljoin(base + "/", href),
+                          "dt": dt or (old["dt"] if old else None)}
+        elif dt and not old["dt"]:
+            old["dt"] = dt
+    return [(idx, v) for idx, v in found.items() if len(v["title"]) >= 8]
+
+
+def collect_trade(seen, errors):
+    sources = read_trade_sources()
+    words = read_lines("trade_words.txt")
+    if not sources or not words:
+        return []
+    cutoff = datetime.now(KST) - timedelta(days=TRADE_LOOKBACK_DAYS)
+    items = []
+    for name, base in sources:
+        got = {}
+        # 1) 사이트 RSS (최신 기사 전체) 2) 사이트 안 검색 결과
+        try:
+            for i in parse_items(http_get(f"{base}/rss/allArticle.xml")):
+                m = re.search(r"idxno=(\d+)", i["link"])
+                if m:
+                    got.setdefault(m.group(1), {"title": i["title"], "link": i["link"], "dt": i["dt"]})
+        except Exception:
+            pass  # RSS가 없거나 막혀 있으면 검색 결과만 씁니다
+        searched_ok = False
+        for w in words[:TRADE_SEARCH_WORDS]:
+            url = (f"{base}/news/articleList.html?sc_area=A&view_type=sm&sc_word="
+                   f"{urllib.parse.quote(w)}")
+            try:
+                for idx, v in parse_article_list(http_get(url), base):
+                    if idx in got:
+                        if v["dt"] and not got[idx]["dt"]:
+                            got[idx]["dt"] = v["dt"]
+                    else:
+                        got[idx] = v
+                searched_ok = True
+            except Exception as e:
+                errors.append(f"{name} 검색({w}): {e}")
+        if not got and not searched_ok:
+            continue
+        for v in got.values():
+            t = v["title"]
+            if not any(w in t for w in words):
+                continue
+            if v["dt"] is not None and v["dt"] < cutoff:
+                continue
+            key = norm(t)
+            if key in seen:
+                continue
+            seen.add(key)
+            items.append({"title": t, "link": v["link"], "source": name, "dt": v["dt"], "group": TRADE_GROUP})
+    # 날짜를 모르는 기사는 맨 뒤로
+    items.sort(key=lambda i: i["dt"] or cutoff, reverse=True)
+    return items
 
 # ---------- 이슈 키워드 ----------
 def tokens(title):
@@ -230,6 +338,7 @@ def previous_issues():
 
 # ---------- 비슷한 기사 묶기 ----------
 SIMILARITY = 0.3        # 0~1. 높일수록 더 비슷해야 묶이고, 낮출수록 더 많이 묶입니다
+MIN_SHARED = 4          # 제목에서 겹치는 글자 조각이 최소 몇 개 이상이어야 묶을지
 
 
 def _core(title, remove):
@@ -258,9 +367,12 @@ def cluster(items, remove):
         bg = _bigrams(_core(i["title"], remove))
         best, best_sim = None, 0.0
         for c in clusters:
-            sim = max(_similar(bg, x) for x in c["bigrams"])
-            if sim > best_sim:
-                best, best_sim = c, sim
+            for x in c["bigrams"]:
+                if len(bg & x) < MIN_SHARED:
+                    continue
+                sim = _similar(bg, x)
+                if sim > best_sim:
+                    best, best_sim = c, sim
         if best is not None and best_sim >= SIMILARITY and len(bg) >= 4:
             best["items"].append(i)
             best["bigrams"].append(bg)
@@ -328,8 +440,9 @@ def render(groups, items, issues, prev, errors, filtered):
         gi = [i for i in items if i["group"] == g["name"]]
         clusters = cluster(gi, remove)
         buttons.append(f'<button type="button" data-f="{esc(g["name"])}" aria-pressed="false">{esc(g["name"])} {len(gi)}</button>')
+        empty_msg = "최근 7일 새 기사 없음" if g.get("trade") else "최근 48시간 새 기사 없음"
         body = "".join(folder(c) if len(c["items"]) > 1 else row(c["items"][0]) for c in clusters) \
-            or '<li class="empty">최근 48시간 새 기사 없음</li>'
+            or f'<li class="empty">{empty_msg}</li>'
         sections.append(f'<section class="group" data-tag="{esc(g["name"])}">'
                         f'<h3>{esc(g["name"])} <span class="count">{len(gi)}</span></h3>'
                         f'<ul class="news">{body}</ul></section>')
@@ -367,6 +480,21 @@ def render(groups, items, issues, prev, errors, filtered):
     else:
         filtered_html = ""
 
+    portals = []
+    for line in read_lines("portals.txt"):
+        parts = [x.strip() for x in line.split("|")]
+        if len(parts) >= 2 and parts[0] and parts[1].startswith("http"):
+            badge = f"<em>{esc(parts[2])}</em>" if len(parts) > 2 and parts[2] else ""
+            portals.append(f'<a class="portal" href="{esc(parts[1])}" target="_blank" rel="noopener">'
+                           f'<span>{esc(parts[0])}</span>{badge}<span class="arr" aria-hidden="true">↗</span></a>')
+    if portals:
+        portals_html = ('<p class="sub">업계 전문지 바로가기</p>'
+                        '<p class="hint">제목에 보일러·난방이 없어도 업계 소식을 훑어볼 수 있어요.</p>'
+                        f'<div class="portals">{"".join(portals)}</div>'
+                        '<p class="sub">키워드로 검색하기</p>')
+    else:
+        portals_html = ""
+
     tpl = (BASE / "template.html").read_text(encoding="utf-8")
     return (tpl.replace("{{DATE_TITLE}}", f"{now.month}월 {now.day}일 {days[now.weekday()]}요일")
                .replace("{{UPDATED}}", f"{now:%Y.%m.%d %H:%M}")
@@ -374,6 +502,7 @@ def render(groups, items, issues, prev, errors, filtered):
                .replace("{{FILTERS}}", "".join(buttons))
                .replace("{{ROWS}}", "\n".join(sections))
                .replace("{{CHIPS}}", chips)
+               .replace("{{PORTALS}}", portals_html)
                .replace("{{ERRORS}}", err_note)
                .replace("{{FILTERED}}", filtered_html))
 
@@ -381,6 +510,8 @@ def render(groups, items, issues, prev, errors, filtered):
 def main():
     groups = read_groups()
     items, filtered, errors = collect(groups)
+    if read_trade_sources():
+        groups = groups + [{"name": TRADE_GROUP, "terms": [], "trade": True}]
     for e in errors:
         print("경고:", e, file=sys.stderr)
     issues = issue_keywords(items, groups)
@@ -394,7 +525,8 @@ def main():
         ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"완료: 기사 {len(items)}건, 이슈 키워드 {len(issues)}개 → site/index.html")
     total_terms = sum(len(g["terms"]) for g in groups)
-    if total_terms and len(errors) == total_terms:
+    news_errors = [e for e in errors if " 검색(" not in e]   # 전문지 오류는 따로 셈
+    if total_terms and len(news_errors) == total_terms:
         sys.exit(1)  # 전부 실패하면 기존 페이지를 덮어쓰지 않도록 실패 처리
 
 

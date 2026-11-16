@@ -94,6 +94,13 @@
   .filtered .news { margin-top:.5rem; opacity:.85; }
   .filtered .title { font-weight:500; font-size:.95rem; }
   .why { color:var(--ember); font-weight:500; }
+  .sub { font-size:.88rem; font-weight:600; color:var(--ink-soft); margin:1.1rem 0 .5rem; }
+  .sub + .hint { margin-top:-.3rem; }
+  .portals { display:flex; flex-wrap:wrap; gap:.45rem; }
+  .portal { display:inline-flex; align-items:center; gap:.3rem; border:1px solid var(--line); background:var(--surface); color:var(--ink); text-decoration:none; font-weight:500; font-size:.9rem; border-radius:8px; padding:.4rem .75rem; white-space:nowrap; }
+  .portal em { font-style:normal; font-size:.75rem; color:var(--flame); background:var(--flame-soft); border-radius:4px; padding:0 .35rem; }
+  .portal .arr { color:var(--ink-soft); font-size:.8rem; }
+  .portal:hover { border-color:var(--flame); color:var(--flame); }
   :focus-visible { outline:2px solid var(--flame); outline-offset:2px; }
 </style>
 </head>
@@ -114,7 +121,7 @@
   </section>
 
   <h2>이슈 키워드</h2>
-  <p class="hint">최근 48시간 헤드라인에 자주 나온 단어예요. 숫자는 기사 수, NEW는 어제 목록에 없던 단어입니다. 누르면 해당 기사만 모아 보여줘요.</p>
+  <p class="hint">최근 48시간 헤드라인에 자주 나온 단어예요. 숫자는 기사 수, NEW는 지난 갱신 때 없던 단어입니다. 누르면 해당 기사만 모아 보여줘요.</p>
   <div class="issues" id="issues">{{ISSUES}}</div>
   <p class="issue-bar" id="issueBar" hidden><span id="issueLabel"></span> <a id="issueSearch" target="_blank" rel="noopener">네이버에서 더 보기 ↗</a> <button type="button" id="issueClear">해제</button></p>
 
@@ -128,10 +135,11 @@
   {{FILTERED}}
 
   <h2>더 찾아보기</h2>
+  {{PORTALS}}
   <p class="hint">키워드를 누르면 네이버 뉴스 최신순 검색 결과가 새 탭으로 열립니다.</p>
   <div class="chips">{{CHIPS}}</div>
 
-  <footer>매일 아침 자동으로 갱신됩니다. 묶음 순서와 검색어는 keywords.txt, 이슈 키워드에서 뺄 단어는 stopwords.txt에서 바꿀 수 있어요.</footer>
+  <footer>하루 6번(새벽 1시 47분부터 4시간마다) 자동으로 갱신됩니다. 묶음 순서와 검색어는 keywords.txt, 이슈 키워드에서 뺄 단어는 stopwords.txt에서 바꿀 수 있어요.</footer>
 </div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script>

@@ -1,0 +1,9 @@
+# '더 찾아보기'의 업계 전문지 바로가기 버튼. 한 줄에 하나씩, 위에서부터 이 순서대로 표시됩니다.
+# 형식:  이름 | 주소 | 작은 표시(선택)
+# 특정 섹션으로 바로 가고 싶으면, 그 섹션을 브라우저로 연 뒤 주소창의 주소를 복사해 넣고
+# 세 번째 칸에 섹션 이름을 적으면 버튼에 작게 표시돼요.  예) 가스신문 | (가스용품 섹션 주소) | 가스용품
+가스신문 | https://www.gasnews.com
+에너지신문 | https://www.energy-news.co.kr
+칸 KHARN | https://www.kharn.kr
+에너지데일리 | https://www.energydaily.co.kr
+투데이에너지 | https://www.todayenergy.kr
